@@ -1,0 +1,93 @@
+#!/usr/bin/perl
+
+# Name: check_postfix
+# Author: Walter Cinquanta Jr
+# Description: Standalone postfix check script for nagios
+# Notes: This is designed to be as standalone as possible with no perl modules for portability between *nix OS's
+# TODO:
+#	 1) Change domain line to match your local domain
+#	 2) Verify /usr/sbin/sendmail /bin/ps are in the standard locations (sendmail may be in /usr/lib only)
+
+
+use strict;
+
+my $debug = 0;
+
+my $exit;
+my $exitmsg;
+
+my $domain = '@localhost.com'; # TODO: Change to your local machines domain
+
+my $mailfile = '/var/mail/icinga';
+my $matchsubject = 'Icinga test email';
+
+$ENV{PATH} = "/bin:/usr/bin:/usr/sbin";
+
+############################################################################ 
+
+my  ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) =
+    stat ($mailfile);
+
+if (-f $mailfile) {
+
+    my $chk;
+
+    open (MAILF, "<$mailfile");
+	while (<MAILF>) {
+	    if ($_ =~ /^Subject: $matchsubject/) {
+		$chk = 1;
+	    }
+	}
+    close (MAILF);
+
+    if ($chk == 1) {
+	# things checkout
+	# null out mailbox to clean up
+	open (MAILCLEAR, ">$mailfile");
+	print MAILCLEAR '';
+	close (MAILCLEAR);
+	&trigger_test();
+
+	$exit = 0;
+	$exitmsg = "OK - email delivery verified [atime: " . localtime($atime) . " - mtime: " . localtime($mtime) . "]";
+	
+    } else {
+		$exitmsg = "WARNING - NO TRIGGERED EMAIL FOUND! sending one now";
+		&trigger_test();
+		$exit = 1;
+    }
+
+} else {
+    $exitmsg = "CRITICAL - no $mailfile not found - attempting to create one with trigger_test";
+    &trigger_test();
+    $exit = 2;
+}
+
+open (MASTERCHK, "ps -ef | grep 'master' | grep root | grep -v grep | awk {'print \$2'} |");
+    my @master_count = <MASTERCHK>;
+close (MASTERCHK);
+
+if (scalar(@master_count) < 1) {
+    $exitmsg = "CRITICAL - postfix master process not running";
+    $exit = 2;
+}
+
+my $pids = join (' ', @master_count);
+    $pids =~ s/\n|\r//g;
+
+print "$exitmsg [postfixpid: $pids]\n";
+exit $exit;
+
+
+sub trigger_test {
+    # re-trigger the email
+    open (SENDMAIL, "|/usr/sbin/sendmail -t |") or die ("unable to open sendmail pipe: $!\n");
+	print SENDMAIL qq|To: icinga$domain\nFrom: icinga$domain\nSubject: $matchsubject\n\ntest|;
+    close (SENDMAIL);
+}
+
+
+###########################################################################
+
+__END__
+

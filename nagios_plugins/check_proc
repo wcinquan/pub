@@ -1,0 +1,40 @@
+#!/usr/bin/perl
+
+# Name: check_disk
+# Author: Walter Cinquanta Jr
+# Description: Standalone process check script for nagios
+# Notes: This is designed to be as standalone as possible with no perl modules for portability between *nix OS's
+# TODO: Nothing
+
+use strict;
+use Getopt::Long qw(:config bundling);
+
+my %opt = {};
+GetOptions	(\%opt,	"proc|p=s",
+			"warn|w=s", # low number
+			"crit|c=s"  # high number
+			);
+my $debug = 0;
+
+my $id = `hi --me`;
+my @procs;
+
+if ($id =~ /gzone/) { # adding support for solaris gzone scanning of processes
+    # ps -ef -Z|grep global|grep master
+    @procs = `ps -ef -Z|grep global|grep -v grep|grep -v 'check_proc'|grep $opt{proc}`;
+} else {
+    @procs = `ps -ef|grep -v grep|grep -v 'check_proc'|grep $opt{proc}`;
+}
+
+my $pcount = scalar(@procs);
+
+if ($pcount >= $opt{'warn'} && $pcount <= $opt{'crit'}) {
+    print "OK - $pcount '$opt{proc}' online\n";
+    exit 0;
+} elsif ($pcount < $opt{'warn'}) {
+    print "CRITICAL - pid '$opt{proc}' short on pids ($pcount/$opt{warn})\n";
+    exit 2;
+} else {
+    print "WARNING - pid '$opt{proc}' over count on pids ($pcount/$opt{crit})\n";
+    exit 1;
+}

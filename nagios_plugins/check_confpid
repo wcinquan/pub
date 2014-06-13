@@ -1,0 +1,63 @@
+#!/usr/bin/perl
+
+# Name: check_confpid
+# Author: Walter Cinquanta Jr
+# Description: Standalone process check script for nagios looking for processes via pid files
+# Notes: This is designed to be as standalone as possible with no perl modules for portability between *nix OS's
+# TODO: Nothing
+
+# Tell Perl what we need to use
+use strict;
+use Getopt::Long qw(:config bundling);
+
+my $debug = 0;
+
+my %opt = {};
+
+GetOptions (\%opt, "dir|f=s", 
+		 "user|u=s");
+
+$ENV{PATH} = "/bin:/usr/bin:/usr/sbin";
+
+my @err = ();
+my $check = 0;
+my $total = 0;
+
+my $dir = $opt{dir};
+
+opendir (DIRLIST, $dir) or die ("can't open file: $!\n");
+
+	while (my $pids = readdir(DIRLIST)) {
+		next if ($pids =~ /^(\.|\.\.)$/);
+
+		open (PIDH, "$dir/$pids") or die ("can't open pid: $!\n");
+			my $data = <PIDH>;
+			chomp ($data);
+
+			my $tmp_check = "ps -fu $opt{user} | grep $data | wc -l"; # bypass taint security
+			    $tmp_check =~ /^(.*)$/;
+				my $do_check = $1;
+
+			my $ps = `$do_check`;
+
+			if ($ps == 1) {
+				$check++;
+			} else {
+				$pids =~ s/\.pid//;
+				push (@err, $pids);
+			}
+		close (PIDH);
+		$total++;
+	}
+
+close (DIRLIST);
+
+if ($check == $total) {
+    print "OK - $check/$total total pids up\n";
+    exit 0;
+} else {
+    print "CRITICAL - $check/$total up (" . join (',', @err) . ")\n";
+    exit 2;
+}
+
+

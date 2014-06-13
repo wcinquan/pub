@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+
+# Name: check_disk
+# Author: Walter Cinquanta Jr
+# Description: Standalone disk check script for nagios designed for a single line dump of filesystems
+# Notes: This is designed to be as standalone as possible with no perl modules for portability between *nix OS's
+# TODO:
+#	 1) Possible change the location of 'df' if required
+
+use strict;
+use Getopt::Long qw(:config bundling);
+
+my $debug = 0;
+
+my %opt = {};
+
+GetOptions (\%opt,	"warn|w=s", # low number
+			"crit|c=s", # high number
+			"excludes|e=s" # exclude partition list (comma seperated)
+			);
+
+$ENV{PATH} = "/bin:/usr/bin:/usr/sbin";
+
+my $df = `uname` =~ /Linux/i ? '/bin/df -P -t ext4 -t ext3' : '/usr/bin/df';
+
+my @err = ();
+my $alert = 0;
+my @status = ('OK', 'WARNING', 'CRITICAL');
+
+die ("No Crit and warning levels!\n") unless ($opt{'warn'} and $opt{'crit'});
+
+my @excludes = split (',', $opt{excludes});
+
+###########################################################################
+
+open (DFH, "$df -k |") or die ("UNABLE TO STAT DF '$df': $!\n");
+
+    while (<DFH>) {
+
+	chomp;
+
+	my ($fs, $size, $used, $avail, $cap, $mount) = split(/\s+/, $_);
+
+	my $skip = 0;
+
+	foreach my $e (@excludes) {
+	    $skip = 1 if ($e =~ /$mount/);
+	}
+
+	next if $skip == 1;
+
+	$cap =~ s/\%//;
+
+	print "($fs, $size, $used, $avail, $cap, $mount)\n" if ($debug);
+
+	if ($cap >= $opt{'crit'}) {
+	    $alert = 2 if ($alert == 0);
+	    push (@err, "$cap \% $mount");
+	} elsif ($cap >= $opt{'warn'}) {
+	    $alert = 1 if ($alert == 0);
+	    push (@err, "$cap \% $mount");
+	}
+    }
+
+close (DFH);
+
+
+if (scalar(@err) > 0) {
+    print "$status[$alert] - ";
+
+    print join (' :: ', @err);
+
+    print "\n";
+    exit $alert;
+} else {
+    print "OK - (disk usage < WARN:$opt{warn} < CRIT:$opt{crit})\n";
+    exit 0;
+}

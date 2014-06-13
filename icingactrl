@@ -1,0 +1,171 @@
+#!/usr/bin/perl
+
+# Name: icingactrl
+# Author: Walter Cinquanta Jr
+# Description: Standalone process check script for nagios looking for processes via pid files
+# Notes: This needs to be run from the commandline ON your monitoring host
+# TODO:
+#	1) EDIT email_* variables
+#	2) Possibly install perl modules listed below
+
+use strict;
+use LWP::UserAgent;
+use Term::ReadKey;
+use Term::ANSIColor;
+use Getopt::Long;
+    $Term::ANSIColor::AUTORESET = 1;
+use Date::Manip;
+
+my $cmdpipe = '/path/to/icinga.cmd';
+my $opts = {};
+my $who = $ENV{'SUDO_USER'};
+my $dieerr = "Please specify a -f <FILE> Option\n\nNote: File should have one host per line.\n";
+
+### CONFIG ###
+my $email_user = 'me@somewhere.com';
+my $email_domain = '@somewhere.com';
+##############
+
+GetOptions(
+	"file|f=s"	=> \$opts->{file},
+	"debug|d"	=> \$opts->{debug}
+) || die ($dieerr);
+
+die ($dieerr) unless (-e $opts->{file});
+
+print "\nWhat Service to schedule downtime (SERVICE DESCRIPTION) [DEFAULT: ALL]: ";
+	chomp (my $service = <STDIN>);
+
+    my $serv;
+    if ($service =~ /^$|ALL/i) {
+	$serv = 'SCHEDULE_HOST_SVC_DOWNTIME';
+    } else {
+	$serv = 'SCHEDULE_SVC_DOWNTIME';
+	$service .= ';';
+    }
+
+print "\nStart_Time: [default: NOW]: ";
+	chomp (my $from = <STDIN>);
+
+	$from = &UnixDate('today',"%Y-%m-%d %H:%M:%S") unless ($from);
+
+while ($from !~ /^\d{4}-\d{2}-\d{2} \d{2}\:\d{2}\:\d{2}$/) {
+
+	print "\nFormat YYYY-MM-DD HH:MM:SS\n";
+	print "Start_Time: [default: NOW]: ";
+		chomp ($from = <STDIN>);
+}
+
+#my $tmp_till = &UnixDate('today',"%Y-%m-%d %H:%M:%S");
+my $tmp_till = &UnixDate(DateCalc($from, '1 hours'), "%Y-%m-%d %H:%M:%S");
+
+
+print "\nEnd_Time: [default: $tmp_till (1hr)]: ";
+	chomp (my $till = <STDIN>);
+
+	$till = $tmp_till unless ($till);
+
+while ($till !~ /^\d{4}-\d{2}-\d{2} \d{2}\:\d{2}\:\d{2}$/) {
+
+	print "\nFormat YYYY-MM-DD HH:MM:SS\n";
+	print "Start_Time: [default: NOW]: ";
+		chomp ($till = <STDIN>);
+}
+
+print "FROM: $from " . UnixDate($from, "%s") . "\n" if ($opts->{debug});
+print "TILL: $till " . UnixDate($till, "%s") . "\n" if ($opts->{debug});
+print "DateCalc: " . DateCalc($from, $till) . "\n" if ($opts->{debug}); 
+
+# THIS IS BAD!!!! - my $end = &UnixDate(DateCalc($from, $till), "%s");
+my $end = &UnixDate($till, "%s");
+
+
+open (FILEH, "<$opts->{file}") or die ("Unable to open file: $!\n");
+
+my $cmd_list;
+
+my $now = &UnixDate('today', "%s");
+#for testing in mins 
+#my $end = &UnixDate(DateCalc($from, $turnoff . ' minutes'), "%s");
+
+my $nice_from = $from;
+$from = &UnixDate($from, "%s");
+
+my $dur = $end - $from;
+
+my $comment;
+
+while (length($comment) < 5) {
+    print "Comment (why the downtime?) ";
+	chomp ($comment = <STDIN>);
+}
+
+print qq|Scheduling...
+    start: $nice_from
+    end: $till
+    duration: $dur (seconds)
+
+|;
+
+print "Press [enter] to proceed ";
+    chomp (my $slowdown = <STDIN>);
+
+print "\n\n";
+
+my @scheduled_hosts = ();
+
+while (<FILEH>) {
+
+	chomp;
+	
+	next if ($_ =~ /^$|^#/); # no lines with spaces or comments (or blank lines)
+
+	my $host = $_;
+
+	#enable/disable all notifications per host - 25=disable notifications
+	# 	const SCHEDULE_HOST_SVC_DOWNTIME = 122;
+
+	my $cmd = "[$now] $serv;$host;$service$from;$end;1;0;$dur;$who;ICINGACTRL=>$comment\n";
+	print "$cmd" if ($opts->{debug});
+
+	$cmd_list .= $cmd;
+
+	print "Scheduling downtime on services for $host\n";
+	push (@scheduled_hosts, $host);
+}
+
+close (FILEH);
+
+system ("/usr/bin/printf '$cmd_list' > $cmdpipe");
+
+open (SENDMAILH, "| /usr/sbin/sendmail -t |") or die ("unable to open sendmail pipe: $!\n");
+
+my $email_to = $opts->{debug} ? "$who$email_domain" : $email_user;
+
+print SENDMAILH qq|To: $email_to
+From: icinga$email_domain
+Subject: [ICINGACTRL] Scheduling downtime ($nice_from -> $till)
+
+The following hosts have been scheduled for downtime:
+
+|;
+
+foreach (@scheduled_hosts) {
+    print SENDMAILH "\t$_ \n";
+}
+
+print SENDMAILH "\nReason: $comment\nSubmitter: $who\n\n";
+
+close (SENDMAILH);
+
+print "Triggering off schedule email to $email_to\n";
+
+print "Done\n";
+
+
+__END__
+
+# /bin/printf "[%lu] SCHEDULE_HOST_SVC_DOWNTIME;host1;1110741500;1110748700;0;0;7200;Some One;Some Downtime Comment\n" $now > $commandfile
+
+Web test:
+cmd_typ=23&cmd_mod=2&host=[THE HOST]&service=[THE SERVICE]&btnSubmit=Commit"
